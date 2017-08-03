@@ -20,6 +20,9 @@ import android.Manifest;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.net.Uri;
 import android.os.AsyncTask;
 import android.os.Bundle;
@@ -46,11 +49,14 @@ import com.google.api.services.vision.v1.Vision;
 import com.google.api.services.vision.v1.VisionRequest;
 import com.google.api.services.vision.v1.VisionRequestInitializer;
 import com.google.api.services.vision.v1.model.AnnotateImageRequest;
+import com.google.api.services.vision.v1.model.AnnotateImageResponse;
 import com.google.api.services.vision.v1.model.BatchAnnotateImagesRequest;
 import com.google.api.services.vision.v1.model.BatchAnnotateImagesResponse;
+import com.google.api.services.vision.v1.model.BoundingPoly;
 import com.google.api.services.vision.v1.model.EntityAnnotation;
 import com.google.api.services.vision.v1.model.Feature;
 import com.google.api.services.vision.v1.model.Image;
+import com.google.api.services.vision.v1.model.Vertex;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -60,7 +66,7 @@ import java.util.List;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
-    private static final String CLOUD_VISION_API_KEY = "YOUR_API_KEY";
+    private static final String CLOUD_VISION_API_KEY = "AIzaSyCorhaYXWiAzVoHZFo937tK8F3HI39cl1I";
     public static final String FILE_NAME = "temp.jpg";
     private static final String ANDROID_CERT_HEADER = "X-Android-Cert";
     private static final String ANDROID_PACKAGE_HEADER = "X-Android-Package";
@@ -245,10 +251,10 @@ public class MainActivity extends AppCompatActivity {
 
                         // add the features we want
                         annotateImageRequest.setFeatures(new ArrayList<Feature>() {{
-                            Feature labelDetection = new Feature();
-                            labelDetection.setType("LABEL_DETECTION");
-                            labelDetection.setMaxResults(10);
-                            add(labelDetection);
+                            Feature requestedFeature = new Feature();
+                            requestedFeature.setType("TEXT_DETECTION");
+                            requestedFeature.setMaxResults(100);
+                            add(requestedFeature);
                         }});
 
                         // Add the list of one thing to the request
@@ -261,8 +267,17 @@ public class MainActivity extends AppCompatActivity {
                     annotateRequest.setDisableGZipContent(true);
                     Log.d(TAG, "created Cloud Vision request object, sending request");
 
-                    BatchAnnotateImagesResponse response = annotateRequest.execute();
-                    return convertResponseToString(response);
+                    BatchAnnotateImagesResponse responseBatch = annotateRequest.execute();
+                    AnnotateImageResponse response = responseBatch.getResponses().get(0);
+                    List<EntityAnnotation> labels = response.getTextAnnotations();
+                    List<EntityAnnotation> filteredLabels = new ArrayList<EntityAnnotation>();
+                    for (EntityAnnotation label : labels) {
+                        String text = label.getDescription();
+                        if (!text.contains(" ") && !text.contains("\n")) filteredLabels.add(label);
+                    }
+                    highlightDetectedRegions(bitmap, filteredLabels);
+                    processedBitmap = bitmap;
+                    return convertResponseToString(filteredLabels);
 
                 } catch (GoogleJsonResponseException e) {
                     Log.d(TAG, "failed to make API request because " + e.getContent());
@@ -275,6 +290,7 @@ public class MainActivity extends AppCompatActivity {
 
             protected void onPostExecute(String result) {
                 mImageDetails.setText(result);
+                mMainImage.setImageBitmap(processedBitmap);
             }
         }.execute();
     }
@@ -299,13 +315,12 @@ public class MainActivity extends AppCompatActivity {
         return Bitmap.createScaledBitmap(bitmap, resizedWidth, resizedHeight, false);
     }
 
-    private String convertResponseToString(BatchAnnotateImagesResponse response) {
-        String message = "I found these things:\n\n";
+    private String convertResponseToString(List<EntityAnnotation> labels) {
+        String message = "Result:\n\n";
 
-        List<EntityAnnotation> labels = response.getResponses().get(0).getLabelAnnotations();
         if (labels != null) {
             for (EntityAnnotation label : labels) {
-                message += String.format(Locale.US, "%.3f: %s", label.getScore(), label.getDescription());
+                message += String.format(Locale.US, "%.3f: %s", label.getConfidence(), label.getDescription());
                 message += "\n";
             }
         } else {
@@ -314,4 +329,22 @@ public class MainActivity extends AppCompatActivity {
 
         return message;
     }
+
+    private void highlightDetectedRegions(Bitmap bitmap, List<EntityAnnotation> labels) {
+        Canvas canvas = new Canvas(bitmap);
+        for (EntityAnnotation label : labels) {
+            BoundingPoly boundingPoly = label.getBoundingPoly();
+            List<Vertex> polyVertices = boundingPoly.getVertices();
+            Paint paint = new Paint();
+            paint.setStrokeWidth(6);
+            paint.setColor(Color.RED);
+            for (int i = 0; i < polyVertices.size(); ++i) {
+                Vertex v1 = polyVertices.get(i);
+                Vertex v2 = polyVertices.get((i + 1) % polyVertices.size());
+                canvas.drawLine(v1.getX(), v1.getY(), v2.getX(), v2.getY(), paint);
+            }
+        }
+    }
+
+    private Bitmap processedBitmap = null;
 }
